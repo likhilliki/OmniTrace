@@ -1,0 +1,9 @@
+# CDK core
+aws-cdk-lib==2.147.3
+constructs>=10.0.0,<11.0.0
+
+# CDK CLI (installed separately via npm, but listed here for reference)
+# npm install -g aws-cdk@2.147.3
+
+# Python CDK type stubs (optional, helps IDEs)
+# aws-cdk.aws-lambda-python-alpha==2.147.3a0

@@ -1,0 +1,574 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  OmniTrace: Autonomous Cloud Incident Triage & Self-Healing Pipeline
+  Deploys the complete serverless backend for the OmniTrace platform.
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 120
+    MemorySize: 512
+    Environment:
+      Variables:
+        DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+        STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
+        POWERTOOLS_SERVICE_NAME: OmniTrace
+        LOG_LEVEL: INFO
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment
+
+Resources:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # DynamoDB Table
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceIncidentsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: OmniTrace_Incidents
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: incidentId
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: incidentId
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: status-timestamp-index
+          KeySchema:
+            - AttributeName: timestamp
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: OmniTrace
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # IAM Roles
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub OmniTrace-LambdaExecution-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: OmniTraceLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BedrockConverseAccess
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:Converse
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0
+              - Sid: DynamoDBAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt OmniTraceIncidentsTable.Arn
+                  - !Sub ${OmniTraceIncidentsTable.Arn}/index/*
+              - Sid: StepFunctionsAccess
+                Effect: Allow
+                Action:
+                  - states:StartExecution
+                  - states:DescribeExecution
+                  - states:ListExecutions
+                Resource:
+                  - !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
+              - Sid: EventBridgeAccess
+                Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  - !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+              - Sid: CloudWatchMetrics
+                Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Sid: SSMParameters
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/omnitrace/*
+
+  OmniTraceStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub OmniTrace-StateMachine-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: OmniTraceStateMachinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeLambda
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:OmniTrace-AgentDispatcher-${Environment}
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:OmniTrace-SelfHealer-${Environment}
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutLogEvents
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+              - Sid: XRayAccess
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+
+  OmniTraceEventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub OmniTrace-EventBridge-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: OmniTraceEventBridgePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Lambda Functions
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceAgentDispatcher:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub OmniTrace-AgentDispatcher-${Environment}
+      CodeUri: backend/handlers/
+      Handler: agent_dispatcher.handler
+      Role: !GetAtt OmniTraceLambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 1024
+      Description: Orchestrates Bedrock Converse API calls for AUDITOR, PATCHER, and VALIDATOR agents
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: amazon.nova-pro-v1:0
+          DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+      Tags:
+        Project: OmniTrace
+        Function: AgentDispatcher
+
+  OmniTraceSelfHealer:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub OmniTrace-SelfHealer-${Environment}
+      CodeUri: backend/handlers/
+      Handler: self_healer.handler
+      Role: !GetAtt OmniTraceLambdaExecutionRole.Arn
+      Timeout: 120
+      MemorySize: 512
+      Description: Executes safe remediation actions and updates incident status to RESOLVED
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+      Tags:
+        Project: OmniTrace
+        Function: SelfHealer
+
+  OmniTraceApiHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub OmniTrace-ApiHandler-${Environment}
+      CodeUri: backend/handlers/
+      Handler: api_handler.handler
+      Role: !GetAtt OmniTraceLambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Description: REST API handler serving the React frontend
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+          STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
+          EVENTBRIDGE_BUS: default
+      Events:
+        GetIncidents:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OmniTraceHttpApi
+            Path: /api/incidents
+            Method: GET
+        TriggerSimulation:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OmniTraceHttpApi
+            Path: /api/trigger
+            Method: POST
+        GetIncidentById:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OmniTraceHttpApi
+            Path: /api/incidents/{incidentId}
+            Method: GET
+      Tags:
+        Project: OmniTrace
+        Function: ApiHandler
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # API Gateway HTTP API (v2)
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Requested-With
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+      Tags:
+        Project: OmniTrace
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # CloudWatch Log Groups
+  # ─────────────────────────────────────────────────────────────────────────
+  AgentDispatcherLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/OmniTrace-AgentDispatcher-${Environment}
+      RetentionInDays: 90
+
+  SelfHealerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/OmniTrace-SelfHealer-${Environment}
+      RetentionInDays: 90
+
+  ApiHandlerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/OmniTrace-ApiHandler-${Environment}
+      RetentionInDays: 90
+
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/states/OmniTrace-Pipeline-${Environment}
+      RetentionInDays: 90
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step Functions State Machine
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub OmniTrace-Pipeline-${Environment}
+      Role: !GetAtt OmniTraceStateMachineRole.Arn
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      Tracing:
+        Enabled: true
+      Definition:
+        Comment: OmniTrace Autonomous Incident Triage and Self-Healing Pipeline
+        StartAt: AuditorDiagnosis
+        States:
+          AuditorDiagnosis:
+            Type: Task
+            Resource: !GetAtt OmniTraceAgentDispatcher.Arn
+            Parameters:
+              agent_role: AUDITOR
+              incident.$: $
+            ResultPath: $.auditor_result
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                  - Lambda.TooManyRequestsException
+                  - States.TaskFailed
+                IntervalSeconds: 3
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: IncidentFailed
+                ResultPath: $.error
+            Next: PatcherDrafting
+          PatcherDrafting:
+            Type: Task
+            Resource: !GetAtt OmniTraceAgentDispatcher.Arn
+            Parameters:
+              agent_role: PATCHER
+              incident.$: $
+            ResultPath: $.patcher_result
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.TooManyRequestsException
+                  - States.TaskFailed
+                IntervalSeconds: 3
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: IncidentFailed
+                ResultPath: $.error
+            Next: ValidatorCheck
+          ValidatorCheck:
+            Type: Task
+            Resource: !GetAtt OmniTraceAgentDispatcher.Arn
+            Parameters:
+              agent_role: VALIDATOR
+              incident.$: $
+            ResultPath: $.validator_result
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.TooManyRequestsException
+                  - States.TaskFailed
+                IntervalSeconds: 3
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: IncidentFailed
+                ResultPath: $.error
+            Next: SafetyDecision
+          SafetyDecision:
+            Type: Choice
+            Choices:
+              - Variable: $.validator_result.verdict
+                StringEquals: VETO
+                Next: EscalateToSRE
+              - Variable: $.validator_result.verdict
+                StringEquals: EXECUTE
+                Next: ExecuteRemediation
+            Default: EscalateToSRE
+          ExecuteRemediation:
+            Type: Task
+            Resource: !GetAtt OmniTraceSelfHealer.Arn
+            Parameters:
+              incident.$: $
+            ResultPath: $.healer_result
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.TooManyRequestsException
+                  - States.TaskFailed
+                IntervalSeconds: 2
+                MaxAttempts: 2
+                BackoffRate: 1.5
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: IncidentFailed
+                ResultPath: $.error
+            Next: IncidentResolved
+          IncidentResolved:
+            Type: Succeed
+          EscalateToSRE:
+            Type: Pass
+            Parameters:
+              incidentId.$: $.incidentId
+              status: ESCALATED
+              reason: Validator vetoed automated remediation - human intervention required
+              validator_findings.$: $.validator_result
+            ResultPath: $.escalation
+            Next: IncidentEscalated
+          IncidentEscalated:
+            Type: Succeed
+          IncidentFailed:
+            Type: Fail
+            Error: OmniTracePipelineError
+            Cause: One or more pipeline stages failed
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # EventBridge Rule
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub OmniTrace-IncidentAlert-${Environment}
+      Description: Listens for OmniTrace incident alerts and triggers the triage pipeline
+      EventBusName: default
+      EventPattern:
+        source:
+          - omnitrace.alert
+        detail-type:
+          - OmniTraceIncident
+      State: ENABLED
+      Targets:
+        - Id: OmniTraceStateMachineTarget
+          Arn: !Ref OmniTraceStateMachine
+          RoleArn: !GetAtt OmniTraceEventBridgeRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              incidentId: $.detail.incidentId
+              service: $.detail.service
+              errorType: $.detail.errorType
+              severity: $.detail.severity
+              region: $.detail.region
+              errorLogs: $.detail.errorLogs
+              timestamp: $.time
+            InputTemplate: |
+              {
+                "incidentId": "<incidentId>",
+                "service": "<service>",
+                "errorType": "<errorType>",
+                "severity": "<severity>",
+                "region": "<region>",
+                "errorLogs": "<errorLogs>",
+                "timestamp": "<timestamp>"
+              }
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # CloudWatch Alarms
+  # ─────────────────────────────────────────────────────────────────────────
+  AgentDispatcherErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub OmniTrace-AgentDispatcher-Errors-${Environment}
+      AlarmDescription: Alert when agent dispatcher Lambda has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub OmniTrace-AgentDispatcher-${Environment}
+      TreatMissingData: notBreaching
+
+  StateMachineFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub OmniTrace-Pipeline-Failures-${Environment}
+      AlarmDescription: Alert when the triage pipeline has execution failures
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref OmniTraceStateMachine
+      TreatMissingData: notBreaching
+
+# ─────────────────────────────────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────────────────────────────────
+Outputs:
+  ApiEndpoint:
+    Description: OmniTrace REST API endpoint URL
+    Value: !Sub https://${OmniTraceHttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Export:
+      Name: !Sub OmniTrace-ApiEndpoint-${Environment}
+
+  DynamoDBTableName:
+    Description: OmniTrace DynamoDB incidents table name
+    Value: !Ref OmniTraceIncidentsTable
+    Export:
+      Name: !Sub OmniTrace-DynamoDBTable-${Environment}
+
+  StateMachineArn:
+    Description: OmniTrace Step Functions state machine ARN
+    Value: !Ref OmniTraceStateMachine
+    Export:
+      Name: !Sub OmniTrace-StateMachineArn-${Environment}
+
+  AgentDispatcherArn:
+    Description: Agent Dispatcher Lambda ARN
+    Value: !GetAtt OmniTraceAgentDispatcher.Arn
+
+  ApiHandlerArn:
+    Description: API Handler Lambda ARN
+    Value: !GetAtt OmniTraceApiHandler.Arn

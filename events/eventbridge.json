@@ -1,0 +1,19 @@
+{
+  "version": "0",
+  "id": "a8765b99-b5f3-4e5c-9e77-example12345",
+  "source": "omnitrace.alert",
+  "account": "123456789012",
+  "time": "2025-01-15T14:30:00Z",
+  "region": "us-east-1",
+  "detail-type": "OmniTraceIncident",
+  "detail": {
+    "incidentId": "INC-TEST-1700000000-ABCD1234",
+    "service": "omnitrace-data-pipeline",
+    "errorType": "DATABASE_CONNECTION_POOL_EXHAUSTION",
+    "severity": "P1",
+    "region": "us-east-1",
+    "description": "RDS Aurora connection pool exhausted",
+    "timestamp": "2025-01-15T14:30:00.000Z",
+    "errorLogs": "[ERROR] 2025-01-15T09:15:33Z - FATAL: remaining connection slots are reserved\n[ERROR] 2025-01-15T09:15:34Z - pg_stat_activity shows 498/500 max connections\n[CRITICAL] 2025-01-15T09:15:37Z - Data pipeline STALLED"
+  }
+}

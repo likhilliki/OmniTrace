@@ -1,0 +1,10 @@
+# OmniTrace Lambda dependencies
+# boto3 is provided by the Lambda runtime — only list extras here
+
+# AWS Lambda Powertools (optional, for structured logging/tracing)
+# aws-lambda-powertools==2.39.1
+
+# boto3 and botocore are pre-installed in the Lambda Python 3.12 runtime.
+# We list them here for local development and testing.
+boto3==1.34.144
+botocore==1.34.144

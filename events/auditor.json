@@ -1,0 +1,13 @@
+{
+  "agent_role": "AUDITOR",
+  "incident": {
+    "incidentId": "INC-TEST-1700000000-ABCD1234",
+    "service": "omnitrace-api-gateway",
+    "errorType": "MEMORY_EXHAUSTION",
+    "severity": "P1",
+    "region": "us-east-1",
+    "description": "API Gateway Lambda hitting 512MB memory limit",
+    "timestamp": "2025-01-15T14:30:00.000Z",
+    "errorLogs": "[ERROR] 2025-01-15T14:32:11Z - INIT_REPORT Init Duration: 4521.23 ms\n[ERROR] 2025-01-15T14:32:15Z - REPORT RequestId: a7f3b291 Duration: 29834.12 ms Memory Size: 512 MB Max Memory Used: 511 MB\n[ERROR] 2025-01-15T14:32:15Z - Runtime.ExitError: signal: killed\n[CRITICAL] 2025-01-15T14:32:18Z - 847 requests failed in last 60 seconds - Error rate 73.2%\n[CRITICAL] 2025-01-15T14:32:20Z - CloudWatch Alarm: APIGateway5XXError ALARM\n[CRITICAL] 2025-01-15T14:32:23Z - Health check FAILED - /health returning 503"
+  }
+}

@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+.env
+.env.local
+
+# CDK
+cdk.out/
+cdk/__pycache__/
+cdk/constructs/__pycache__/
+
+# SAM build artifacts
+.aws-sam/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.production
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# AWS credentials (never commit)
+.aws/
+aws-credentials*
+*.pem
+*.key
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/

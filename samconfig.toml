@@ -1,0 +1,28 @@
+# SAM CLI configuration file for OmniTrace
+# Run `sam deploy --guided` on first deploy to populate values,
+# or fill in your stack name and S3 bucket below.
+
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "omnitrace-prod"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "omnitrace-prod"
+s3_prefix = "omnitrace"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"]
+parameter_overrides = "Environment=prod"
+resolve_s3 = true
+
+[default.validate.parameters]
+lint = true
+
+[default.local_invoke.parameters]
+docker_network = "host"

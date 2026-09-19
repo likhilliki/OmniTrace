@@ -1,0 +1,38 @@
+# CDK output directories
+cdk.out/
+.cdk.staging/
+
+# Python virtual environments and package artifacts
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.hypothesis/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit these
+.env
+*.pem
+*.key
+credentials

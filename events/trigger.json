@@ -1,0 +1,21 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /api/trigger",
+  "rawPath": "/api/trigger",
+  "rawQueryString": "",
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "xxxxxxxxxx",
+    "domainName": "localhost",
+    "http": {
+      "method": "POST",
+      "path": "/api/trigger",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "sam-local"
+    },
+    "stage": "dev"
+  },
+  "body": "{\"triggeredBy\": \"sam-local-test\", \"scenarioIndex\": 0}",
+  "isBase64Encoded": false
+}
