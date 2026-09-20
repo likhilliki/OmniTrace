@@ -4,6 +4,8 @@ frontend:
     preBuild:
       commands:
         - cd frontend
+        - node --version
+        - npm --version
         - npm ci
     build:
       commands:

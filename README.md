@@ -1,56 +1,31 @@
-# 🔍 OmniTrace — Autonomous Cloud Incident Triage & Self-Healing Pipeline
+<div align="center">
+  <img src="docs/logo.png" alt="OmniTrace Logo" width="160"/>
+
+# OmniTrace — Autonomous Cloud Incident Triage & Self-Healing Pipeline
 
 > **Track 2: Ship It** — AWS Serverless Hackathon submission  
 > Powered by **Amazon Bedrock Nova Pro**, **Step Functions**, **EventBridge**, **Lambda**, **DynamoDB**, and **API Gateway**
+
+</div>
 
 ---
 
 ## 🏗️ Architecture Overview
 
-```
-                         ┌──────────────────────────────────────────────────────┐
-                         │                  AWS Cloud (us-east-1)               │
-                         │                                                      │
-   React SPA             │   API Gateway (HTTP API v2)                          │
-   (Amplify)  ──POST──►  │   /api/trigger  ──►  ApiHandler Lambda               │
-              ◄─GET───   │   /api/incidents ◄──  ApiHandler Lambda               │
-                         │         │                     ▲                      │
-                         │         │ put_events           │ query/scan           │
-                         │         ▼                      │                      │
-                         │   EventBridge Default Bus  DynamoDB                   │
-                         │   source: omnitrace.alert  OmniTrace_Incidents        │
-                         │         │                      ▲                      │
-                         │         │ StartExecution        │ PutItem/UpdateItem  │
-                         │         ▼                      │                      │
-                         │   ┌─────────────────────────────────────┐            │
-                         │   │     Step Functions State Machine     │            │
-                         │   │                                      │            │
-                         │   │  ┌──────────┐                        │            │
-                         │   │  │ AUDITOR  │ ◄── Bedrock Nova Pro   │            │
-                         │   │  │  Agent   │   (root cause + INR)   │            │
-                         │   │  └────┬─────┘                        │            │
-                         │   │       │                               │            │
-                         │   │  ┌────▼─────┐                        │            │
-                         │   │  │ PATCHER  │ ◄── Bedrock Nova Pro   │            │
-                         │   │  │  Agent   │   (remediation cmds)   │            │
-                         │   │  └────┬─────┘                        │            │
-                         │   │       │                               │            │
-                         │   │  ┌────▼──────┐                       │            │
-                         │   │  │ VALIDATOR │ ◄── Bedrock Nova Pro  │            │
-                         │   │  │  Agent    │   (safety audit)      │            │
-                         │   │  └────┬──────┘                       │            │
-                         │   │       │                               │            │
-                         │   │  ┌────▼──────────────────────┐       │            │
-                         │   │  │     Choice State           │       │            │
-                         │   │  │  verdict == EXECUTE ?      │       │            │
-                         │   │  └──┬────────────────────┬───┘       │            │
-                         │   │   VETO                 EXECUTE        │            │
-                         │   │     │                      │          │            │
-                         │   │  EscalateToSRE     SelfHealer Lambda  │            │
-                         │   │  (manual review)   (mock remediation) │            │
-                         │   └─────────────────────────────────────┘            │
-                         └──────────────────────────────────────────────────────┘
-```
+![OmniTrace Architecture — Autonomous Cloud Incident Triage & Self-Healing Pipeline](docs/architecture.png)
+
+> **4-tier pipeline:** Client Tier → Ingestion & Core Compute → Orchestration & Reasoning Swarm → Evaluation & Decision Tree
+
+The pipeline flows across four tiers:
+
+| Tier | Components | Role |
+|------|-----------|------|
+| **① Client Tier** | React SPA (AWS Amplify) | Dashboard UI — trigger incidents, view pipeline, monitor status |
+| **② Ingestion & Core Compute** | API Gateway → ApiHandler Lambda → EventBridge | Receives alert, emits `omnitrace.alert` event |
+| **③ Orchestration & Reasoning Swarm** | Step Functions → AUDITOR + PATCHER + VALIDATOR (Bedrock Nova Pro) + DynamoDB | 3-agent AI pipeline for root cause → remediation → safety audit |
+| **④ Evaluation & Decision Tree** | Guardrail Choice State → SelfHealer Lambda **or** Amazon SNS Alert | EXECUTE: auto-patch · VETO: escalate to SRE on-call |
+
+A **Real-time Status & Logs Feedback Loop** runs continuously from DynamoDB back to the React dashboard, providing live incident updates and UI refresh.
 
 ---
 
@@ -208,72 +183,6 @@ aws s3 sync dist/ s3://YOUR_BUCKET_NAME --delete
 
 # Or use AWS CLI to create CloudFront distribution
 ```
-
----
-
-## 🎬 3-Minute Demo Script
-
-### Scene 1: Introduction (0:00 – 0:30)
-> "OmniTrace is an autonomous cloud incident triage and self-healing pipeline.  
-> Instead of paging engineers at 3 AM, it deploys three AI agents powered by Amazon Bedrock Nova Pro  
-> to diagnose, plan, validate, and auto-fix cloud incidents — all in under 2 minutes."
-
-**Show:** Architecture diagram. Mention: Bedrock, Step Functions, EventBridge, Lambda, DynamoDB.
-
----
-
-### Scene 2: Trigger a Live Incident (0:30 – 1:00)
-> "Let me trigger a simulated P1 incident — a memory exhaustion event on our API Gateway Lambda."
-
-**Action:**
-1. Open the OmniTrace dashboard (Amplify URL)
-2. Click **"Trigger Simulated Cloud Incident"**
-3. Watch the status badge change: `TRIGGERED` → `AUDITOR DIAGNOSING`
-
-**Say:**
-> "The moment the button is clicked, an EventBridge event fires, triggering the Step Functions pipeline."
-
----
-
-### Scene 3: Watch the AI Pipeline (1:00 – 2:00)
-> "OmniTrace deploys three Bedrock agents in sequence."
-
-**Show each status transition in the UI:**
-
-1. `AUDITOR DIAGNOSING` — click **"Agent Reasoning"** tab
-   > "The Auditor agent reads the raw CloudWatch logs and identifies the root cause — Lambda memory exhaustion.  
-   > It also estimates the financial impact: ₹4.2 lakh in revenue loss and SLA penalties."
-
-2. `PATCHER DRAFTING` — watch status update
-   > "The Patcher agent generates non-destructive AWS CLI commands to fix the issue —  
-   > ECS service restart and Lambda memory upgrade. Each command includes a rollback."
-
-3. `VALIDATOR CHECKING` — click **"Agent Reasoning"** → VALIDATOR section
-   > "The Validator is our safety guardian. It scans every command for dangerous patterns —  
-   > no database drops, no IAM key changes, no 0.0.0.0/0 rules.  
-   > It issues EXECUTE — remediation is approved."
-
----
-
-### Scene 4: Auto-Remediation + Impact (2:00 – 2:45)
-> "With the Validator's green light, the Self-Healer Lambda executes the remediation commands."
-
-**Show:**
-- Status changes to `AUTO REMEDIATED` ✅
-- Click **"Remediation Script"** tab — show generated bash script
-- Click **"Cost Impact"** tab
-
-**Say:**
-> "The pipeline prevented ₹4.2 lakh in downtime costs, averted an SLA breach penalty,  
-> and saved 6 engineering hours — all without a single page to an on-call engineer.  
-> The full reasoning trail is persisted in DynamoDB for audit and post-mortem."
-
----
-
-### Scene 5: Close (2:45 – 3:00)
-> "OmniTrace demonstrates how Amazon Bedrock, Step Functions, and EventBridge  
-> can create a fully autonomous, production-grade incident response system.  
-> Every action is logged, every command is validated, and every rupee saved is tracked."
 
 ---
 
