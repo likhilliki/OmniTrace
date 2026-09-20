@@ -214,9 +214,9 @@ def update_incident_resolved(incident_id: str, timestamp: str, resolution_summar
         Key={"incidentId": incident_id, "timestamp": timestamp},
         UpdateExpression=(
             "SET #st = :status, resolvedAt = :resolvedAt, "
-            "resolutionSummary = :summary, ttl = :ttl"
+            "resolutionSummary = :summary, #ttl = :ttl"
         ),
-        ExpressionAttributeNames={"#st": "status"},
+        ExpressionAttributeNames={"#st": "status", "#ttl": "ttl"},
         ExpressionAttributeValues={
             ":status": "AUTO_REMEDIATED",
             ":resolvedAt": datetime.now(timezone.utc).isoformat(),
@@ -253,6 +253,24 @@ def handler(event: dict, context: Any) -> dict[str, Any]:
     incident_id = incident.get("incidentId", str(uuid.uuid4()))
     timestamp = incident.get("timestamp", datetime.now(timezone.utc).isoformat())
     service = incident.get("service", "unknown-service")
+
+    # Resolve the real DynamoDB sort key — the timestamp from Step Functions input
+    # ($.time from EventBridge) may differ from the one api_handler.py wrote.
+    try:
+        from boto3.dynamodb.conditions import Key as DKey
+        resp = table.query(
+            KeyConditionExpression=DKey("incidentId").eq(incident_id),
+            Limit=10,
+        )
+        primary = next(
+            (i for i in resp.get("Items", []) if "agentRole" not in i),
+            None,
+        )
+        if primary:
+            timestamp = primary["timestamp"]
+            logger.info("Resolved real timestamp | incidentId=%s | ts=%s", incident_id, timestamp)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Timestamp resolution failed (using event ts) | %s", exc)
 
     # Extract patcher commands from the pipeline state
     patcher_result = (

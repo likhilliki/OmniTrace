@@ -11,7 +11,8 @@ Globals:
     MemorySize: 512
     Environment:
       Variables:
-        DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+        INCIDENT_TABLE: OmniTrace_Incidents
+        DYNAMODB_TABLE: OmniTrace_Incidents
         STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
         POWERTOOLS_SERVICE_NAME: OmniTrace
         LOG_LEVEL: INFO
@@ -26,39 +27,13 @@ Parameters:
 Resources:
 
   # ─────────────────────────────────────────────────────────────────────────
-  # DynamoDB Table
+  # SNS Topic — SRE Escalation (VETO path)
   # ─────────────────────────────────────────────────────────────────────────
-  OmniTraceIncidentsTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+  OmniTraceSREEscalationTopic:
+    Type: AWS::SNS::Topic
     Properties:
-      TableName: OmniTrace_Incidents
-      BillingMode: PAY_PER_REQUEST
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-      SSESpecification:
-        SSEEnabled: true
-      AttributeDefinitions:
-        - AttributeName: incidentId
-          AttributeType: S
-        - AttributeName: timestamp
-          AttributeType: S
-      KeySchema:
-        - AttributeName: incidentId
-          KeyType: HASH
-        - AttributeName: timestamp
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: status-timestamp-index
-          KeySchema:
-            - AttributeName: timestamp
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
+      TopicName: !Sub OmniTrace-SRE-Escalation-${Environment}
+      DisplayName: OmniTrace SRE Escalation
       Tags:
         - Key: Project
           Value: OmniTrace
@@ -66,12 +41,20 @@ Resources:
           Value: !Ref Environment
 
   # ─────────────────────────────────────────────────────────────────────────
-  # IAM Roles
+  # NOTE: DynamoDB Table is managed outside CloudFormation (DeletionPolicy: Retain
+  # was set at creation). The table OmniTrace_Incidents already exists in
+  # us-east-1 with incidentId (PK) and timestamp (SK). Managing it here
+  # caused GSI update conflicts. The table ARN is referenced directly in
+  # IAM policies using !Sub with the known table name.
   # ─────────────────────────────────────────────────────────────────────────
-  OmniTraceLambdaExecutionRole:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # IAM Role — AgentDispatcher + SelfHealer (explicit Bedrock permissions)
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceAgentDispatcherRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub OmniTrace-LambdaExecution-${Environment}
+      RoleName: !Sub OmniTrace-AgentDispatcher-${Environment}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -82,20 +65,25 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: OmniTraceLambdaPolicy
+        - PolicyName: OmniTraceAgentDispatcherPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: BedrockConverseAccess
+              - Sid: BedrockInvokeModel
                 Effect: Allow
                 Action:
                   - bedrock:InvokeModel
-                  - bedrock:Converse
-                  - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-pro-v1:0
-                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0
-              - Sid: DynamoDBAccess
+                  - arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0
+                  - arn:aws:bedrock:us-east-1:755329540298:inference-profile/us.amazon.nova-pro-v1:0
+              - Sid: BedrockConverse
+                Effect: Allow
+                Action:
+                  - bedrock:Converse
+                Resource:
+                  - arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0
+                  - arn:aws:bedrock:us-east-1:755329540298:inference-profile/us.amazon.nova-pro-v1:0
+              - Sid: DynamoDBFullAccess
                 Effect: Allow
                 Action:
                   - dynamodb:PutItem
@@ -105,23 +93,9 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:Scan
                 Resource:
-                  - !GetAtt OmniTraceIncidentsTable.Arn
-                  - !Sub ${OmniTraceIncidentsTable.Arn}/index/*
-              - Sid: StepFunctionsAccess
-                Effect: Allow
-                Action:
-                  - states:StartExecution
-                  - states:DescribeExecution
-                  - states:ListExecutions
-                Resource:
-                  - !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
-              - Sid: EventBridgeAccess
-                Effect: Allow
-                Action:
-                  - events:PutEvents
-                Resource:
-                  - !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
-              - Sid: CloudWatchMetrics
+                  - arn:aws:dynamodb:us-east-1:755329540298:table/OmniTrace_Incidents
+                  - arn:aws:dynamodb:us-east-1:755329540298:table/OmniTrace_Incidents/index/*
+              - Sid: CloudWatchLogs
                 Effect: Allow
                 Action:
                   - cloudwatch:PutMetricData
@@ -129,14 +103,121 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: '*'
-              - Sid: SSMParameters
+
+  OmniTraceSelfHealerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub OmniTrace-SelfHealer-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: OmniTraceSelfHealerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BedrockInvokeModel
                 Effect: Allow
                 Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
+                  - bedrock:InvokeModel
                 Resource:
-                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/omnitrace/*
+                  - arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0
+                  - arn:aws:bedrock:us-east-1:755329540298:inference-profile/us.amazon.nova-pro-v1:0
+              - Sid: BedrockConverse
+                Effect: Allow
+                Action:
+                  - bedrock:Converse
+                Resource:
+                  - arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0
+                  - arn:aws:bedrock:us-east-1:755329540298:inference-profile/us.amazon.nova-pro-v1:0
+              - Sid: DynamoDBFullAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - arn:aws:dynamodb:us-east-1:755329540298:table/OmniTrace_Incidents
+                  - arn:aws:dynamodb:us-east-1:755329540298:table/OmniTrace_Incidents/index/*
+              - Sid: SNSEscalation
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref OmniTraceSREEscalationTopic
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # IAM Role — ApiHandler
+  # ─────────────────────────────────────────────────────────────────────────
+  OmniTraceApiHandlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub OmniTrace-ApiHandler-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: OmniTraceApiHandlerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DynamoDBReadWrite
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - arn:aws:dynamodb:us-east-1:755329540298:table/OmniTrace_Incidents
+                  - arn:aws:dynamodb:us-east-1:755329540298:table/OmniTrace_Incidents/index/*
+              - Sid: EventBridgePutEvents
+                Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  - !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+              - Sid: StepFunctionsRead
+                Effect: Allow
+                Action:
+                  - states:DescribeExecution
+                  - states:ListExecutions
+                Resource:
+                  - !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # IAM Role — Step Functions State Machine
+  # ─────────────────────────────────────────────────────────────────────────
   OmniTraceStateMachineRole:
     Type: AWS::IAM::Role
     Properties:
@@ -153,14 +234,14 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: InvokeLambda
+              - Sid: InvokeLambdaFunctions
                 Effect: Allow
                 Action:
                   - lambda:InvokeFunction
                 Resource:
                   - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:OmniTrace-AgentDispatcher-${Environment}
                   - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:OmniTrace-SelfHealer-${Environment}
-              - Sid: CloudWatchLogs
+              - Sid: CloudWatchLogsDelivery
                 Effect: Allow
                 Action:
                   - logs:CreateLogDelivery
@@ -173,7 +254,7 @@ Resources:
                   - logs:DescribeResourcePolicies
                   - logs:DescribeLogGroups
                 Resource: '*'
-              - Sid: XRayAccess
+              - Sid: XRayTracing
                 Effect: Allow
                 Action:
                   - xray:PutTraceSegments
@@ -182,6 +263,9 @@ Resources:
                   - xray:GetSamplingTargets
                 Resource: '*'
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # IAM Role — EventBridge → Step Functions
+  # ─────────────────────────────────────────────────────────────────────────
   OmniTraceEventBridgeRole:
     Type: AWS::IAM::Role
     Properties:
@@ -213,14 +297,17 @@ Resources:
       FunctionName: !Sub OmniTrace-AgentDispatcher-${Environment}
       CodeUri: backend/handlers/
       Handler: agent_dispatcher.handler
-      Role: !GetAtt OmniTraceLambdaExecutionRole.Arn
+      Role: !GetAtt OmniTraceAgentDispatcherRole.Arn
       Timeout: 300
       MemorySize: 1024
       Description: Orchestrates Bedrock Converse API calls for AUDITOR, PATCHER, and VALIDATOR agents
       Environment:
         Variables:
-          BEDROCK_MODEL_ID: amazon.nova-pro-v1:0
-          DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+          BEDROCK_MODEL_ID: us.amazon.nova-pro-v1:0
+          BEDROCK_REGION: us-east-1
+          AGENT_MODE: SIMULATE
+          INCIDENT_TABLE: OmniTrace_Incidents
+          DYNAMODB_TABLE: OmniTrace_Incidents
       Tags:
         Project: OmniTrace
         Function: AgentDispatcher
@@ -231,13 +318,15 @@ Resources:
       FunctionName: !Sub OmniTrace-SelfHealer-${Environment}
       CodeUri: backend/handlers/
       Handler: self_healer.handler
-      Role: !GetAtt OmniTraceLambdaExecutionRole.Arn
+      Role: !GetAtt OmniTraceSelfHealerRole.Arn
       Timeout: 120
       MemorySize: 512
       Description: Executes safe remediation actions and updates incident status to RESOLVED
       Environment:
         Variables:
-          DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+          INCIDENT_TABLE: OmniTrace_Incidents
+          DYNAMODB_TABLE: OmniTrace_Incidents
+          SNS_ESCALATION_TOPIC: !Ref OmniTraceSREEscalationTopic
       Tags:
         Project: OmniTrace
         Function: SelfHealer
@@ -248,13 +337,14 @@ Resources:
       FunctionName: !Sub OmniTrace-ApiHandler-${Environment}
       CodeUri: backend/handlers/
       Handler: api_handler.handler
-      Role: !GetAtt OmniTraceLambdaExecutionRole.Arn
+      Role: !GetAtt OmniTraceApiHandlerRole.Arn
       Timeout: 30
       MemorySize: 256
       Description: REST API handler serving the React frontend
       Environment:
         Variables:
-          DYNAMODB_TABLE: !Ref OmniTraceIncidentsTable
+          INCIDENT_TABLE: OmniTrace_Incidents
+          DYNAMODB_TABLE: OmniTrace_Incidents
           STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:OmniTrace-Pipeline-${Environment}
           EVENTBRIDGE_BUS: default
       Events:
@@ -276,12 +366,30 @@ Resources:
             ApiId: !Ref OmniTraceHttpApi
             Path: /api/incidents/{incidentId}
             Method: GET
+        OptionsIncidents:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OmniTraceHttpApi
+            Path: /api/incidents
+            Method: OPTIONS
+        OptionsTrigger:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OmniTraceHttpApi
+            Path: /api/trigger
+            Method: OPTIONS
+        OptionsIncidentById:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OmniTraceHttpApi
+            Path: /api/incidents/{incidentId}
+            Method: OPTIONS
       Tags:
         Project: OmniTrace
         Function: ApiHandler
 
   # ─────────────────────────────────────────────────────────────────────────
-  # API Gateway HTTP API (v2)
+  # API Gateway HTTP API v2
   # ─────────────────────────────────────────────────────────────────────────
   OmniTraceHttpApi:
     Type: AWS::Serverless::HttpApi
@@ -294,13 +402,15 @@ Resources:
           - Content-Type
           - Authorization
           - X-Requested-With
+          - X-Amz-Date
+          - X-Api-Key
         AllowMethods:
           - GET
           - POST
           - OPTIONS
       DefaultRouteSettings:
-        ThrottlingBurstLimit: 100
-        ThrottlingRateLimit: 50
+        ThrottlingBurstLimit: 200
+        ThrottlingRateLimit: 100
       Tags:
         Project: OmniTrace
 
@@ -365,7 +475,7 @@ Resources:
                   - Lambda.SdkClientException
                   - Lambda.TooManyRequestsException
                   - States.TaskFailed
-                IntervalSeconds: 3
+                IntervalSeconds: 5
                 MaxAttempts: 3
                 BackoffRate: 2
             Catch:
@@ -387,7 +497,7 @@ Resources:
                   - Lambda.AWSLambdaException
                   - Lambda.TooManyRequestsException
                   - States.TaskFailed
-                IntervalSeconds: 3
+                IntervalSeconds: 5
                 MaxAttempts: 3
                 BackoffRate: 2
             Catch:
@@ -409,7 +519,7 @@ Resources:
                   - Lambda.AWSLambdaException
                   - Lambda.TooManyRequestsException
                   - States.TaskFailed
-                IntervalSeconds: 3
+                IntervalSeconds: 5
                 MaxAttempts: 3
                 BackoffRate: 2
             Catch:
@@ -440,7 +550,7 @@ Resources:
                   - Lambda.AWSLambdaException
                   - Lambda.TooManyRequestsException
                   - States.TaskFailed
-                IntervalSeconds: 2
+                IntervalSeconds: 3
                 MaxAttempts: 2
                 BackoffRate: 1.5
             Catch:
@@ -468,7 +578,7 @@ Resources:
             Cause: One or more pipeline stages failed
 
   # ─────────────────────────────────────────────────────────────────────────
-  # EventBridge Rule
+  # EventBridge Rule — listens for omnitrace.alert source
   # ─────────────────────────────────────────────────────────────────────────
   OmniTraceEventRule:
     Type: AWS::Events::Rule
@@ -555,7 +665,7 @@ Outputs:
 
   DynamoDBTableName:
     Description: OmniTrace DynamoDB incidents table name
-    Value: !Ref OmniTraceIncidentsTable
+    Value: OmniTrace_Incidents
     Export:
       Name: !Sub OmniTrace-DynamoDBTable-${Environment}
 
@@ -572,3 +682,9 @@ Outputs:
   ApiHandlerArn:
     Description: API Handler Lambda ARN
     Value: !GetAtt OmniTraceApiHandler.Arn
+
+  SREEscalationTopicArn:
+    Description: SNS topic ARN for SRE escalation (VETO path)
+    Value: !Ref OmniTraceSREEscalationTopic
+    Export:
+      Name: !Sub OmniTrace-SREEscalationTopic-${Environment}

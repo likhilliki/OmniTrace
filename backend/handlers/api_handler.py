@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Any
 
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
@@ -166,8 +167,6 @@ def handle_get_incidents(query_params: dict) -> dict:
 
     try:
         response = table.scan(
-            FilterExpression="attribute_exists(incidentId) AND attribute_type(incidentId, :t)",
-            ExpressionAttributeValues={":t": "S"},
             Limit=200,
         )
         items = response.get("Items", [])
@@ -201,8 +200,7 @@ def handle_get_incident_by_id(incident_id: str) -> dict:
     """
     try:
         response = table.query(
-            KeyConditionExpression="incidentId = :id",
-            ExpressionAttributeValues={":id": incident_id},
+            KeyConditionExpression=Key("incidentId").eq(incident_id),
             ScanIndexForward=True,
         )
         items = response.get("Items", [])

@@ -1,0 +1,44 @@
+{
+  "agent_role": "VALIDATOR",
+  "incident": {
+    "incidentId": "INC-TEST-1700000000-ABCD1234",
+    "service": "omnitrace-api-gateway",
+    "errorType": "MEMORY_EXHAUSTION",
+    "severity": "P1",
+    "region": "us-east-1",
+    "timestamp": "2025-01-15T14:30:00.000Z"
+  },
+  "auditor_result": {
+    "root_cause": "Lambda function OOM due to unbounded in-memory cache growth",
+    "error_category": "MEMORY_LEAK",
+    "blast_radius": "MODERATE",
+    "estimated_downtime_minutes": 12
+  },
+  "patcher_result": {
+    "remediation_strategy": "Increase Lambda memory and force rolling restart",
+    "commands": [
+      {
+        "step": 1,
+        "description": "Increase Lambda memory from 512MB to 1024MB",
+        "command": "aws lambda update-function-configuration --function-name omnitrace-api-gateway --memory-size 1024 --region us-east-1",
+        "rollback_command": "aws lambda update-function-configuration --function-name omnitrace-api-gateway --memory-size 512 --region us-east-1",
+        "estimated_duration_seconds": 10,
+        "risk_level": "LOW"
+      },
+      {
+        "step": 2,
+        "description": "Force new ECS service deployment to replace running tasks",
+        "command": "aws ecs update-service --cluster omnitrace-cluster --service omnitrace-api-gateway --force-new-deployment --region us-east-1",
+        "rollback_command": "aws ecs update-service --cluster omnitrace-cluster --service omnitrace-api-gateway --desired-count 2 --region us-east-1",
+        "estimated_duration_seconds": 60,
+        "risk_level": "LOW"
+      }
+    ],
+    "total_remediation_time_seconds": 70,
+    "expected_outcome": "Lambda memory pressure relieved; service stabilizes within 2 minutes",
+    "reasoning_chain": [
+      "Memory increase addresses OOM root cause",
+      "Force deployment replaces in-flight requests with fresh instances"
+    ]
+  }
+}

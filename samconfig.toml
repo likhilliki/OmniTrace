@@ -9,14 +9,14 @@ version = 0.1
 stack_name = "omnitrace-prod"
 
 [default.build.parameters]
-cached = true
+cached = false
 parallel = true
 
 [default.deploy.parameters]
 stack_name = "omnitrace-prod"
 s3_prefix = "omnitrace"
 region = "us-east-1"
-confirm_changeset = true
+confirm_changeset = false
 capabilities = ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"]
 parameter_overrides = "Environment=prod"
 resolve_s3 = true

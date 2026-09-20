@@ -107,6 +107,9 @@ omni-trace/
 # Install AWS SAM CLI
 pip install aws-sam-cli
 
+# Python 3.13 required (3.11 also works if you update the runtime in template.yaml)
+python --version   # confirm 3.13 is on PATH
+
 # Install Node.js 18+ for frontend
 # Ensure AWS credentials are configured
 aws sts get-caller-identity
@@ -155,7 +158,7 @@ StateMachineArn = arn:aws:states:us-east-1:...
 ```yaml
 version: 1
 frontend:
-  phases:
+  phasves:
     preBuild:
       commands:
         - cd frontend

@@ -1,0 +1,8 @@
+[
+  {
+    "Source": "omnitrace.alert",
+    "DetailType": "OmniTraceIncident",
+    "Detail": "{\"incidentId\":\"INC-1789883578-781C\",\"service\":\"omnitrace-ml-inference\",\"errorType\":\"GPU_MEMORY_OVERFLOW\",\"severity\":\"P2\",\"region\":\"us-east-1\",\"errorLogs\":\"[ERROR] 2026-09-20T13:00:00Z - CUDA out of memory. Tried to allocate 4.50 GiB\\n[ERROR] 2026-09-20T13:00:01Z - SageMaker endpoint omnitrace-inference-prod InService to OutOfService\\n[CRITICAL] 2026-09-20T13:00:02Z - ML predictions unavailable - 0/3 instances healthy\\n[ERROR] 2026-09-20T13:00:03Z - torch.cuda.OutOfMemoryError: CUDA out of memory\\n[CRITICAL] 2026-09-20T13:00:04Z - Revenue impact: Recommendation engine offline - CTR dropping\",\"timestamp\":\"2026-09-20T13:00:00Z\"}",
+    "EventBusName": "default"
+  }
+]

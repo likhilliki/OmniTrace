@@ -1,0 +1,33 @@
+{
+  "agent_role": "PATCHER",
+  "incident": {
+    "incidentId": "INC-TEST-1700000000-ABCD1234",
+    "service": "omnitrace-api-gateway",
+    "errorType": "MEMORY_EXHAUSTION",
+    "severity": "P1",
+    "region": "us-east-1",
+    "description": "API Gateway Lambda hitting 512MB memory limit",
+    "timestamp": "2025-01-15T14:30:00.000Z",
+    "errorLogs": "[ERROR] 2025-01-15T14:32:15Z - Max Memory Used: 511 MB\n[CRITICAL] Error rate 73.2%"
+  },
+  "auditor_result": {
+    "root_cause": "Lambda function OOM due to unbounded in-memory cache growth",
+    "error_category": "MEMORY_LEAK",
+    "affected_services": ["omnitrace-api-gateway"],
+    "blast_radius": "MODERATE",
+    "estimated_downtime_minutes": 12,
+    "financial_impact_inr": {
+      "revenue_loss": 102000,
+      "sla_penalty": 50000,
+      "engineering_cost": 21000,
+      "total": 173000
+    },
+    "confidence_score": 0.92,
+    "reasoning_chain": [
+      "Log pattern shows Max Memory Used == Memory Size (511/512 MB)",
+      "Runtime killed signal indicates OOM not timeout",
+      "Error rate 73.2% with 847 failed requests in 60s confirms widespread impact"
+    ],
+    "recommended_severity": "P1"
+  }
+}
